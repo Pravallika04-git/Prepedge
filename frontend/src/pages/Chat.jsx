@@ -31,25 +31,87 @@ export default function Chat() {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
+  const formatResponse = (text) => {
+    if (!text) return '';
+    // Detect code blocks and preserve them
+    const parts = text.split(/(```[\s\S]*?```)/g);
+    return parts.map((part, i) => {
+      if (part.startsWith('```')) {
+        const lang = part.match(/^```(\w*)/)?.[1] || '';
+        const code = part.replace(/^```\w*\n?/, '').replace(/```$/, '');
+        return (
+          <pre key={i} style={{
+            background: 'rgba(0,0,0,0.4)', borderRadius: '8px', padding: '12px',
+            fontSize: '0.82rem', overflowX: 'auto', margin: '8px 0',
+            border: '1px solid rgba(99,102,241,0.2)', color: '#a7f3d0',
+            fontFamily: "'Fira Code', 'Courier New', monospace", whiteSpace: 'pre-wrap'
+          }}>
+            {lang && <div style={{ color: 'var(--text-muted)', fontSize: '0.7rem', marginBottom: 4 }}>{lang}</div>}
+            {code}
+          </pre>
+        );
+      }
+      // Format **bold**, bullet points and line breaks
+      return (
+        <span key={i} style={{ whiteSpace: 'pre-wrap' }}>
+          {part.split('\n').map((line, j) => {
+            const boldFormatted = line.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+            return (
+              <span key={j}>
+                <span dangerouslySetInnerHTML={{ __html: boldFormatted }} />
+                {j < part.split('\n').length - 1 && <br />}
+              </span>
+            );
+          })}
+        </span>
+      );
+    });
+  };
+
   const sendMessage = async () => {
-    if (!input.trim() || loading) return;
-    const userMsg = input.trim();
+    const trimmed = input.trim();
+    if (!trimmed) {
+      toast.error('Please enter a question before sending.');
+      return;
+    }
+    if (loading) return;
+
     setInput('');
-    setMessages(prev => [...prev, { role: 'user', content: userMsg }]);
+    setMessages(prev => [...prev, { role: 'user', content: trimmed }]);
     setLoading(true);
 
     try {
-      const res = await api.post('/ai/chat', { message: userMsg, sessionId: sessionId || undefined });
-      const data = res.data.data;
+      const res = await api.post('/ai/chat', { message: trimmed, sessionId: sessionId || undefined });
+      const data = res.data?.data;
+      if (!data?.response) throw new Error('Empty response from server');
       if (!sessionId) setSessionId(data.sessionId);
       setMessages(prev => [...prev, { role: 'assistant', content: data.response }]);
     } catch (err) {
-      toast.error('AI service unavailable. Check your API key configuration.');
-      setMessages(prev => [...prev, { role: 'assistant', content: '⚠️ Sorry, I encountered an error. Please try again.' }]);
+      const status = err.response?.status;
+      let userMsg = '⚠️ Could not get a response. Please try again.';
+      let toastMsg = 'AI service error. Please try again.';
+
+      if (!err.response) {
+        userMsg = '⚠️ Cannot reach the server. Please make sure the backend is running.';
+        toastMsg = 'Backend unavailable. Start the Spring Boot server and try again.';
+      } else if (status === 400) {
+        userMsg = '⚠️ Invalid request — please enter a valid question.';
+        toastMsg = 'Invalid request.';
+      } else if (status === 401 || status === 403) {
+        userMsg = '⚠️ Your session has expired. Please log in again.';
+        toastMsg = 'Session expired — please log in again.';
+      } else if (status >= 500) {
+        userMsg = '⚠️ The server encountered an error. Please try again in a moment.';
+        toastMsg = 'Server error. Check backend logs for details.';
+      }
+
+      toast.error(toastMsg);
+      setMessages(prev => [...prev, { role: 'assistant', content: userMsg }]);
     } finally {
       setLoading(false);
     }
   };
+
 
   const newChat = () => {
     setSessionId(null);
@@ -122,7 +184,7 @@ export default function Chat() {
                     {msg.role === 'user' ? initials : <Bot size={16} />}
                   </div>
                   <div className={`message-bubble ${msg.role}`}>
-                    {msg.content}
+                    {msg.role === 'assistant' ? formatResponse(msg.content) : msg.content}
                   </div>
                 </div>
               ))}

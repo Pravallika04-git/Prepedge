@@ -25,13 +25,24 @@ export default function MockInterview() {
     setLoading(true);
     try {
       const res = await api.post('/ai/interview/questions', { topic, difficulty });
-      // Parse the questions from AI response
-      const raw = res.data.data.questions || '';
+      // Backend returns: { success, message, data: { questions: "1. Q1\n2. Q2..." } }
+      const raw = res.data?.data?.questions || '';
+      console.log('[MockInterview] Raw questions from backend:', raw);
       const parsed = parseQuestions(raw);
+      console.log('[MockInterview] Parsed questions:', parsed);
+      if (parsed.length === 0) {
+        toast.error('No questions were returned. Please try again.');
+        return;
+      }
       setQuestions(parsed);
       setStage(STAGES.QUESTIONS);
     } catch (err) {
-      toast.error('Failed to generate questions. Check AI configuration.');
+      console.error('[MockInterview] Failed to generate questions:', err?.response?.data || err?.message || err);
+      toast.error(
+        err?.response?.data?.message
+          ? `Error: ${err.response.data.message}`
+          : 'Failed to generate questions. Please check the backend is running.'
+      );
     } finally {
       setLoading(false);
     }
@@ -61,18 +72,26 @@ export default function MockInterview() {
     try {
       const evals = await Promise.all(
         questions.map(async (q, i) => {
+          const userAns = (answers[i] || '').trim();
           const res = await api.post('/ai/interview/evaluate', {
             question: q,
-            answer: answers[i] || '',
+            answer: userAns,
             topic,
           });
-          return { question: q, answer: answers[i] || '', evaluation: res.data.data.evaluation };
+          // Backend returns: { success, message, data: { evaluation: "text" } }
+          const evaluation = res.data?.data?.evaluation || 'No feedback available.';
+          return { question: q, answer: userAns, evaluation };
         })
       );
       setEvaluations(evals);
       setStage(STAGES.EVAL);
     } catch (err) {
-      toast.error('Failed to evaluate answers. Check AI configuration.');
+      console.error('[MockInterview] Failed to evaluate answers:', err?.response?.data || err?.message || err);
+      toast.error(
+        err?.response?.data?.message
+          ? `Evaluation error: ${err.response.data.message}`
+          : 'Failed to evaluate answers. Please check the backend is running.'
+      );
     } finally {
       setEvalLoading(false);
     }
@@ -253,7 +272,7 @@ export default function MockInterview() {
               <div className="text-xs" style={{ marginBottom: '6px', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--accent-primary)' }}>
                 <Star size={12} style={{ display: 'inline', marginRight: 4 }} /> AI Feedback
               </div>
-              <div className="text-sm" style={{ color: 'var(--text-primary)', lineHeight: 1.7 }}>{ev.evaluation}</div>
+              <div className="text-sm" style={{ color: 'var(--text-primary)', lineHeight: 1.7, whiteSpace: 'pre-line' }}>{ev.evaluation}</div>
             </div>
           </div>
         ))}

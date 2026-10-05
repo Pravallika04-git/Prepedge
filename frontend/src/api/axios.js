@@ -12,18 +12,12 @@ api.interceptors.request.use((config) => {
   return config;
 });
 
-// Handle 401 globally — redirect to login on token expiry
+// Handle 401 globally — auth is removed, just warn and pass through
 api.interceptors.response.use(
   (res) => res,
   (error) => {
     if (error.response?.status === 401) {
-      // Don't redirect if the 401 came from login/register (wrong credentials)
-      const url = error.config?.url || '';
-      if (!url.includes('/auth/login') && !url.includes('/auth/register')) {
-        localStorage.removeItem('token');
-        localStorage.removeItem('user');
-        window.location.href = '/login';
-      }
+      console.warn('401 Unauthorized — auth is bypassed, ignoring redirect.');
     }
     return Promise.reject(error);
   }

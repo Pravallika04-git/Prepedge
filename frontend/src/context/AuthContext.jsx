@@ -1,5 +1,4 @@
 import { createContext, useContext, useState, useEffect } from 'react';
-import api from '../api/axios';
 
 const AuthContext = createContext(null);
 
@@ -7,43 +6,53 @@ export function AuthProvider({ children }) {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
 
-  // Hydrate from localStorage on mount
+  // Hydrate from localStorage on mount using the demoLoggedIn flag
   useEffect(() => {
     try {
-      const stored = localStorage.getItem('user');
-      const token = localStorage.getItem('token');
-      if (stored && token) {
-        setUser(JSON.parse(stored));
+      const demoLoggedIn = localStorage.getItem('demoLoggedIn') === 'true';
+      if (demoLoggedIn) {
+        const stored = localStorage.getItem('demoUser');
+        const parsed = stored ? JSON.parse(stored) : { fullName: 'Demo User', email: '', role: 'STUDENT' };
+        setUser(parsed);
+      } else {
+        setUser(null);
       }
     } catch {
-      localStorage.removeItem('user');
-      localStorage.removeItem('token');
+      setUser(null);
     } finally {
       setLoading(false);
     }
   }, []);
 
-  const login = async (email, password) => {
-    const res = await api.post('/auth/login', { email, password });
-    const data = res.data.data;
-    localStorage.setItem('token', data.token);
-    localStorage.setItem('user', JSON.stringify(data));
-    setUser(data);
-    return data;
+  /**
+   * Demo login — no network request.
+   * Accepts any valid email format + any non-empty password.
+   */
+  const login = (email, _password) => {
+    const demoUser = { fullName: 'Demo User', email, role: 'STUDENT' };
+    localStorage.setItem('demoLoggedIn', 'true');
+    localStorage.setItem('demoUser', JSON.stringify(demoUser));
+    setUser(demoUser);
+    return demoUser;
   };
 
-  const register = async (fullName, email, password) => {
-    const res = await api.post('/auth/register', { fullName, email, password });
-    const data = res.data.data;
-    localStorage.setItem('token', data.token);
-    localStorage.setItem('user', JSON.stringify(data));
-    setUser(data);
-    return data;
+  /**
+   * Register — demo-only path, mirrors login behaviour.
+   */
+  const register = (fullName, email, _password) => {
+    const demoUser = { fullName, email, role: 'STUDENT' };
+    localStorage.setItem('demoLoggedIn', 'true');
+    localStorage.setItem('demoUser', JSON.stringify(demoUser));
+    setUser(demoUser);
+    return demoUser;
   };
 
+  /** Logout clears all demo state and redirects to /login. */
   const logout = () => {
-    localStorage.removeItem('token');
+    localStorage.removeItem('demoLoggedIn');
+    localStorage.removeItem('demoUser');
     localStorage.removeItem('user');
+    localStorage.removeItem('token');
     setUser(null);
   };
 

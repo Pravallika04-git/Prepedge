@@ -7,6 +7,8 @@ import com.placementportal.repository.ChatMessageRepository;
 import com.placementportal.service.AiService;
 import com.placementportal.service.AuthService;
 import lombok.RequiredArgsConstructor;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
@@ -18,42 +20,69 @@ import java.util.stream.Collectors;
 @RequiredArgsConstructor
 public class AiController {
 
+    private static final Logger logger = LoggerFactory.getLogger(AiController.class);
+
     private final AiService aiService;
     private final AuthService authService;
     private final ChatMessageRepository chatMessageRepository;
 
     @PostMapping("/chat")
     public ResponseEntity<ApiResponse> chat(@RequestBody Map<String, String> request) {
-        User user = authService.getCurrentUser();
         String message = request.get("message");
+
+        // Input validation
+        if (message == null || message.trim().isEmpty()) {
+            return ResponseEntity.badRequest()
+                    .body(ApiResponse.error("Please enter a question."));
+        }
+        message = message.trim();
+
         String sessionId = request.getOrDefault("sessionId", UUID.randomUUID().toString());
+        if (sessionId == null || sessionId.trim().isEmpty()) {
+            sessionId = UUID.randomUUID().toString();
+        }
 
-        // Save user message
-        chatMessageRepository.save(ChatMessage.builder()
-                .user(user)
-                .sessionId(sessionId)
-                .role(ChatMessage.MessageRole.USER)
-                .content(message)
-                .build());
+        // Get AI response FIRST — this always works (mock fallback guarantees it)
+        String aiResponse;
+        try {
+            // Try to get conversation history for context
+            List<ChatMessage> history = chatMessageRepository.findBySessionIdOrderByCreatedAtAsc(sessionId);
+            List<Map<String, String>> conversationHistory = history.stream()
+                    .map(msg -> Map.of(
+                            "role", msg.getRole() == ChatMessage.MessageRole.USER ? "user" : "assistant",
+                            "content", msg.getContent()))
+                    .collect(Collectors.toList());
+            aiResponse = aiService.chat(message, conversationHistory);
+        } catch (Exception e) {
+            logger.warn("Could not load conversation history (DB may be unavailable): {}", e.getMessage());
+            // Still call AI without history — mock fallback always works
+            aiResponse = aiService.chat(message, null);
+        }
 
-        // Get conversation history
-        List<ChatMessage> history = chatMessageRepository.findBySessionIdOrderByCreatedAtAsc(sessionId);
-        List<Map<String, String>> conversationHistory = history.stream()
-                .map(msg -> Map.of(
-                        "role", msg.getRole() == ChatMessage.MessageRole.USER ? "user" : "assistant",
-                        "content", msg.getContent()))
-                .collect(Collectors.toList());
+        // Persist messages — best-effort (failure here must not block the response)
+        try {
+            User user = authService.getCurrentUser();
+            final String finalSessionId = sessionId;
+            final String finalMessage = message;
+            final String finalResponse = aiResponse;
 
-        // Get AI response
-        String aiResponse = aiService.chat(message, conversationHistory);
+            chatMessageRepository.save(ChatMessage.builder()
+                    .user(user)
+                    .sessionId(finalSessionId)
+                    .role(ChatMessage.MessageRole.USER)
+                    .content(finalMessage)
+                    .build());
 
-        // Save AI response
-        chatMessageRepository.save(ChatMessage.builder()
-                .user(user)
-                .sessionId(sessionId)
-                .role(ChatMessage.MessageRole.ASSISTANT)
-                .content(aiResponse)
-                .build());
+            chatMessageRepository.save(ChatMessage.builder()
+                    .user(user)
+                    .sessionId(finalSessionId)
+                    .role(ChatMessage.MessageRole.ASSISTANT)
+                    .content(finalResponse)
+                    .build());
+        } catch (Exception e) {
+            // Log but do NOT fail — the student still gets their answer
+            logger.warn("Chat messages not persisted (DB may be unavailable): {}", e.getMessage());
+        }
 
         Map<String, String> responseData = new HashMap<>();
         responseData.put("response", aiResponse);
@@ -61,6 +90,7 @@ public class AiController {
 
         return ResponseEntity.ok(ApiResponse.success("Response generated", responseData));
     }
+
 
     @GetMapping("/chat/sessions")
     public ResponseEntity<ApiResponse> getChatSessions() {
@@ -97,10 +127,10 @@ public class AiController {
     }
 
     @PostMapping("/interview/evaluate")
-    public ResponseEntity<ApiResponse> evaluateAnswer(@RequestBody Map<String, String> request) {
-        String question = request.get("question");
-        String answer = request.get("answer");
-        String topic = request.get("topic");
+    public ResponseEntity<ApiResponse> evaluateAnswer(@RequestBody(required = false) Map<String, String> request) {
+        String question = request != null ? request.getOrDefault("question", "") : "";
+        String answer = request != null ? request.getOrDefault("answer", "") : "";
+        String topic = request != null ? request.getOrDefault("topic", "General") : "General";
         String evaluation = aiService.evaluateInterviewAnswer(question, answer, topic);
         return ResponseEntity.ok(ApiResponse.success("Answer evaluated", Map.of("evaluation", evaluation)));
     }

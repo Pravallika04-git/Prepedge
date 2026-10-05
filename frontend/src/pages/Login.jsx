@@ -1,146 +1,145 @@
 import { useState, useEffect } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-import { useToast } from '../context/ToastContext';
 import { Zap, Mail, Lock, Eye, EyeOff } from 'lucide-react';
 
 export default function Login() {
-  const [email, setEmail] = useState('');
+  const [email, setEmail]       = useState('');
   const [password, setPassword] = useState('');
-  const [showPw, setShowPw] = useState(false);
-  const [loading, setLoading] = useState(false);
-  const [errors, setErrors] = useState({});
+  const [showPw, setShowPw]     = useState(false);
+  const [loading, setLoading]   = useState(false);
+  const [errors, setErrors]     = useState({});
+
   const { login, user } = useAuth();
-  const toast = useToast();
   const navigate = useNavigate();
 
   // Redirect if already logged in
   useEffect(() => {
     if (user) {
-      navigate(user.role === 'ADMIN' ? '/admin' : '/dashboard', { replace: true });
+      navigate('/dashboard', { replace: true });
     }
   }, [user, navigate]);
 
   const validate = () => {
     const errs = {};
     if (!email.trim()) {
-      errs.email = 'Email is required';
-    } else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-      errs.email = 'Please enter a valid email address';
+      errs.email = 'Please enter your email';
+    } else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) {
+      errs.email = 'Please enter a valid email';
     }
     if (!password) {
-      errs.password = 'Password is required';
+      errs.password = 'Please enter your password';
     }
     setErrors(errs);
     return Object.keys(errs).length === 0;
   };
 
-  const handleSubmit = async (e) => {
+  const handleSubmit = (e) => {
     e.preventDefault();
     if (!validate()) return;
     setLoading(true);
-    try {
-      const user = await login(email, password);
-      toast.success(`Welcome back, ${user.fullName}!`);
-      navigate(user.role === 'ADMIN' ? '/admin' : '/dashboard');
-    } catch (err) {
-      const msg = err.response?.data?.message || 'Login failed. Check your credentials.';
-      toast.error(msg);
-      setErrors({ form: msg });
-    } finally {
+
+    // Demo login — no network request
+    setTimeout(() => {
+      login(email.trim(), password);
       setLoading(false);
-    }
+      navigate('/dashboard');
+    }, 600); // brief artificial delay for UX
   };
 
   return (
-    <div className="auth-page">
-      <div className="auth-bg-orb auth-bg-orb-1" />
-      <div className="auth-bg-orb auth-bg-orb-2" />
+    <div className="pe-auth-page">
+      {/* Background orbs */}
+      <div className="pe-orb pe-orb-1" />
+      <div className="pe-orb pe-orb-2" />
+      <div className="pe-orb pe-orb-3" />
 
-      <div className="auth-card">
-        <div className="auth-logo">
-          <div className="auth-logo-icon">
-            <Zap size={22} color="#fff" />
+      <div className="pe-auth-card">
+        {/* Logo */}
+        <div className="pe-auth-logo">
+          <div className="pe-auth-logo-icon">
+            <Zap size={22} color="#fff" strokeWidth={2.5} />
           </div>
-          <span className="auth-logo-text">PrepEdge</span>
+          <span className="pe-auth-logo-text">PrepEdge</span>
         </div>
 
-        <h1 className="auth-title">Welcome back</h1>
-        <p className="auth-subtitle">Sign in to continue your placement journey</p>
+        {/* Heading */}
+        <h1 className="pe-auth-title">Welcome back</h1>
+        <p className="pe-auth-subtitle">AI-Powered Placement Preparation Portal</p>
 
-        {errors.form && (
-          <div className="form-field-error" style={{ marginBottom: '12px', textAlign: 'center' }}>
-            {errors.form}
-          </div>
-        )}
-
-        <form className="auth-form" onSubmit={handleSubmit} noValidate>
-          <div className="form-group">
-            <label className="form-label">Email</label>
-            <div style={{ position: 'relative' }}>
-              <Mail size={16} style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
+        {/* Form */}
+        <form className="pe-auth-form" onSubmit={handleSubmit} noValidate>
+          {/* Email */}
+          <div className="pe-form-group">
+            <label className="pe-form-label" htmlFor="login-email">Email</label>
+            <div className="pe-input-wrap">
+              <Mail size={16} className="pe-input-icon" />
               <input
                 id="login-email"
                 type="email"
-                className={`form-input${errors.email ? ' input-error' : ''}`}
-                style={{ paddingLeft: '38px' }}
+                className={`pe-input${errors.email ? ' pe-input--error' : ''}`}
                 placeholder="you@example.com"
                 value={email}
-                onChange={(e) => { setEmail(e.target.value); setErrors((p) => ({ ...p, email: undefined, form: undefined })); }}
-                required
+                autoComplete="email"
+                onChange={(e) => {
+                  setEmail(e.target.value);
+                  setErrors((p) => ({ ...p, email: undefined }));
+                }}
               />
             </div>
-            {errors.email && <span className="form-field-error">{errors.email}</span>}
+            {errors.email && <span className="pe-field-error">{errors.email}</span>}
           </div>
 
-          <div className="form-group">
-            <div className="flex items-center justify-between">
-              <label className="form-label">Password</label>
-              <button
-                type="button"
-                className="auth-forgot-link"
-                onClick={() => toast.info('Password reset is not available yet. Contact your admin.')}
-              >
-                Forgot password?
-              </button>
+          {/* Password */}
+          <div className="pe-form-group">
+            <div className="pe-label-row">
+              <label className="pe-form-label" htmlFor="login-password">Password</label>
             </div>
-            <div style={{ position: 'relative' }}>
-              <Lock size={16} style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
+            <div className="pe-input-wrap">
+              <Lock size={16} className="pe-input-icon" />
               <input
                 id="login-password"
                 type={showPw ? 'text' : 'password'}
-                className={`form-input${errors.password ? ' input-error' : ''}`}
-                style={{ paddingLeft: '38px', paddingRight: '38px' }}
+                className={`pe-input pe-input--pw${errors.password ? ' pe-input--error' : ''}`}
                 placeholder="••••••••"
                 value={password}
-                onChange={(e) => { setPassword(e.target.value); setErrors((p) => ({ ...p, password: undefined, form: undefined })); }}
-                required
+                autoComplete="current-password"
+                onChange={(e) => {
+                  setPassword(e.target.value);
+                  setErrors((p) => ({ ...p, password: undefined }));
+                }}
               />
               <button
                 type="button"
+                className="pe-pw-toggle"
                 onClick={() => setShowPw(!showPw)}
-                style={{ position: 'absolute', right: 12, top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)', display: 'flex' }}
+                aria-label={showPw ? 'Hide password' : 'Show password'}
               >
                 {showPw ? <EyeOff size={16} /> : <Eye size={16} />}
               </button>
             </div>
-            {errors.password && <span className="form-field-error">{errors.password}</span>}
+            {errors.password && <span className="pe-field-error">{errors.password}</span>}
           </div>
 
+          {/* Submit */}
           <button
             id="login-submit"
             type="submit"
-            className="btn btn-primary btn-full btn-lg"
+            className="pe-auth-btn"
             disabled={loading}
-            style={{ marginTop: '8px' }}
           >
-            {loading ? 'Signing in…' : 'Sign In'}
+            {loading ? (
+              <span className="pe-btn-spinner" />
+            ) : (
+              'Sign In'
+            )}
           </button>
         </form>
 
-        <p className="auth-divider" style={{ marginTop: '20px' }}>
-          Don't have an account?{' '}
-          <Link to="/register" style={{ fontWeight: 600 }}>Create one</Link>
+        {/* Register link */}
+        <p className="pe-auth-footer">
+          Don&apos;t have an account?{' '}
+          <Link to="/register" className="pe-auth-link">Register</Link>
         </p>
       </div>
     </div>

@@ -35,7 +35,7 @@ export default function App() {
             {/* Public */}
             <Route path="/login"    element={<Login />} />
             <Route path="/register" element={<Register />} />
-            <Route path="/"         element={<Navigate to="/dashboard" replace />} />
+            <Route path="/"         element={<Navigate to="/login" replace />} />
 
             {/* Protected: Layout shell */}
             <Route element={<ProtectedRoute><Layout /></ProtectedRoute>}>
@@ -62,7 +62,7 @@ export default function App() {
             </Route>
 
             {/* Catch-all */}
-            <Route path="*" element={<Navigate to="/dashboard" replace />} />
+            <Route path="*" element={<Navigate to="/login" replace />} />
           </Routes>
         </BrowserRouter>
       </ToastProvider>
