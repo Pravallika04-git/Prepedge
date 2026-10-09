@@ -12,6 +12,12 @@ import org.slf4j.LoggerFactory;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
+import org.apache.pdfbox.pdmodel.PDDocument;
+import org.apache.pdfbox.text.PDFTextStripper;
+import org.springframework.web.multipart.MultipartFile;
+
+import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
 import java.util.*;
 import java.util.stream.Collectors;
 
@@ -94,9 +100,16 @@ public class AiController {
 
     @GetMapping("/chat/sessions")
     public ResponseEntity<ApiResponse> getChatSessions() {
-        User user = authService.getCurrentUser();
-        List<String> sessions = chatMessageRepository.findDistinctSessionIdsByUserId(user.getId());
-        return ResponseEntity.ok(ApiResponse.success("Sessions retrieved", sessions));
+        try {
+            User user = authService.getCurrentUser();
+            if (user == null || user.getId() == null) {
+                return ResponseEntity.ok(ApiResponse.success("Sessions retrieved", Collections.emptyList()));
+            }
+            List<String> sessions = chatMessageRepository.findDistinctSessionIdsByUserId(user.getId());
+            return ResponseEntity.ok(ApiResponse.success("Sessions retrieved", sessions != null ? sessions : Collections.emptyList()));
+        } catch (Exception e) {
+            return ResponseEntity.ok(ApiResponse.success("Sessions retrieved", Collections.emptyList()));
+        }
     }
 
     @GetMapping("/chat/history/{sessionId}")
@@ -111,11 +124,142 @@ public class AiController {
         return ResponseEntity.ok(ApiResponse.success("Chat history retrieved", history));
     }
 
-    @PostMapping("/resume/analyze")
-    public ResponseEntity<ApiResponse> analyzeResume(@RequestBody Map<String, String> request) {
-        String resumeText = request.get("resumeText");
+    @PostMapping(value = "/resume/extract-text", consumes = "multipart/form-data")
+    public ResponseEntity<ApiResponse> extractResumeText(@RequestParam("file") MultipartFile file) {
+        if (file == null || file.isEmpty()) {
+            return ResponseEntity.badRequest().body(ApiResponse.error("Please upload a file."));
+        }
+
+        try {
+            String extracted = extractTextFromFile(file);
+            if (extracted == null || extracted.trim().isEmpty()) {
+                return ResponseEntity.badRequest().body(ApiResponse.error("Could not extract readable text from this file. Please ensure it contains selectable text, or paste your resume text manually."));
+            }
+
+            return ResponseEntity.ok(ApiResponse.success("Text extracted successfully", Map.of(
+                    "text", extracted.trim(),
+                    "filename", file.getOriginalFilename() != null ? file.getOriginalFilename() : "resume"
+            )));
+        } catch (Exception e) {
+            logger.error("Failed to extract text from file: {}", e.getMessage());
+            return ResponseEntity.badRequest().body(ApiResponse.error("Failed to read file: " + e.getMessage()));
+        }
+    }
+
+    @PostMapping(value = "/resume/analyze", consumes = {"application/json", "application/octet-stream"})
+    public ResponseEntity<ApiResponse> analyzeResumeJson(@RequestBody(required = false) Map<String, String> request) {
+        String resumeText = request != null ? request.get("resumeText") : null;
+        return doAnalyzeResume(resumeText);
+    }
+
+    @PostMapping(value = "/resume/analyze", consumes = "multipart/form-data")
+    public ResponseEntity<ApiResponse> analyzeResumeFile(
+            @RequestParam(value = "file", required = false) MultipartFile file,
+            @RequestParam(value = "resumeText", required = false) String resumeText) {
+        String textToAnalyze = resumeText;
+        if ((textToAnalyze == null || textToAnalyze.trim().isEmpty()) && file != null && !file.isEmpty()) {
+            try {
+                textToAnalyze = extractTextFromFile(file);
+            } catch (Exception e) {
+                return ResponseEntity.badRequest().body(ApiResponse.error("Could not read uploaded resume file: " + e.getMessage()));
+            }
+        }
+        return doAnalyzeResume(textToAnalyze);
+    }
+
+    private ResponseEntity<ApiResponse> doAnalyzeResume(String resumeText) {
+        if (resumeText == null || resumeText.trim().isEmpty()) {
+            return ResponseEntity.badRequest()
+                    .body(ApiResponse.error("Please provide your resume content to analyze."));
+        }
+
+        resumeText = resumeText.trim();
+        ValidationResult validation = validateResumeRules(resumeText);
+        if (!validation.isValid()) {
+            return ResponseEntity.badRequest()
+                    .body(ApiResponse.error(validation.getReason()));
+        }
+
         String analysis = aiService.analyzeResume(resumeText);
-        return ResponseEntity.ok(ApiResponse.success("Resume analyzed", Map.of("analysis", analysis)));
+        if (analysis != null) {
+            String clean = analysis.trim();
+            if (clean.startsWith("```")) {
+                clean = clean.replaceAll("^```(?:json)?\\s*", "").replaceAll("\\s*```$", "").trim();
+            }
+            if (clean.contains("\"isResume\": false") || clean.contains("\"isResume\":false")) {
+                return ResponseEntity.badRequest()
+                        .body(ApiResponse.error("The submitted content does not qualify as a resume. Please make sure to include sections such as Education, Technical Skills, Projects, and Experience."));
+            }
+            return ResponseEntity.ok(ApiResponse.success("Resume analyzed", Map.of("analysis", clean)));
+        }
+
+        return ResponseEntity.badRequest()
+                .body(ApiResponse.error("Could not analyze resume. Please try again."));
+    }
+
+    private String extractTextFromFile(MultipartFile file) throws Exception {
+        if (file == null || file.isEmpty()) {
+            return null;
+        }
+
+        String originalFilename = file.getOriginalFilename();
+        String lowerName = (originalFilename != null) ? originalFilename.toLowerCase() : "";
+
+        if (lowerName.endsWith(".pdf") || "application/pdf".equalsIgnoreCase(file.getContentType())) {
+            try (InputStream is = file.getInputStream();
+                 PDDocument document = PDDocument.load(is)) {
+                PDFTextStripper stripper = new PDFTextStripper();
+                stripper.setSortByPosition(true);
+                return stripper.getText(document);
+            }
+        } else if (lowerName.endsWith(".docx")) {
+            try (java.util.zip.ZipInputStream zis = new java.util.zip.ZipInputStream(file.getInputStream())) {
+                java.util.zip.ZipEntry entry;
+                while ((entry = zis.getNextEntry()) != null) {
+                    if ("word/document.xml".equals(entry.getName())) {
+                        byte[] bytes = zis.readAllBytes();
+                        String xml = new String(bytes, StandardCharsets.UTF_8);
+                        return xml.replaceAll("<[^>]+>", " ").replaceAll("\\s+", " ").trim();
+                    }
+                }
+            }
+        }
+
+        return new String(file.getBytes(), StandardCharsets.UTF_8);
+    }
+
+    private ValidationResult validateResumeRules(String text) {
+        if (text.length() < 100) {
+            return new ValidationResult(false, "The provided text is too short to be a valid resume (minimum 100 characters required).");
+        }
+
+        String lower = text.toLowerCase();
+
+        boolean hasEducation = lower.matches("(?s).*\\b(education|degree|b\\.?tech|b\\.?e|m\\.?tech|m\\.?e|bca|mca|bachelor|master|university|college|school|cgpa|gpa|percentage|academics|diploma|matriculation|intermediate)\\b.*");
+        boolean hasSkills = lower.matches("(?s).*\\b(skills|technical skills|technologies|programming|languages|frameworks|tools|competencies|proficiencies|database|tech stack|libraries|developer)\\b.*");
+        boolean hasProjects = lower.matches("(?s).*\\b(experience|work experience|employment|internship|intern|projects|project|responsibilities|contributions|developed|implemented|designed|built)\\b.*");
+        boolean hasContact = lower.matches("(?s).*\\b(email|phone|mobile|contact|linkedin|github|portfolio|summary|objective|profile)\\b.*") || lower.contains("@");
+
+        int categoryCount = (hasEducation ? 1 : 0) + (hasSkills ? 1 : 0) + (hasProjects ? 1 : 0) + (hasContact ? 1 : 0);
+
+        if (categoryCount < 2) {
+            return new ValidationResult(false, "The uploaded text does not meet resume criteria. A resume must contain at least 2 standard sections such as Education, Technical Skills, Projects, or Experience.");
+        }
+
+        return new ValidationResult(true, null);
+    }
+
+    private static class ValidationResult {
+        private final boolean valid;
+        private final String reason;
+
+        public ValidationResult(boolean valid, String reason) {
+            this.valid = valid;
+            this.reason = reason;
+        }
+
+        public boolean isValid() { return valid; }
+        public String getReason() { return reason; }
     }
 
     @PostMapping("/interview/questions")

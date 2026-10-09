@@ -7,6 +7,6 @@
     "build": "cd frontend && npm install && npm run build",
     "dev": "npm --prefix frontend run dev",
     "frontend": "npm --prefix frontend run dev",
-    "backend": "powershell -Command \"$env:JAVA_HOME = 'C:\\Program Files\\Java\\jdk-20'; & './backend/apache-maven-3.9.5/bin/mvn.cmd' -f ./backend/pom.xml spring-boot:run\""
+    "backend": "powershell -Command \"$env:JAVA_HOME = 'C:\\Program Files\\Java\\jdk-20'; mvn -f ./backend/pom.xml spring-boot:run\""
   }
 }

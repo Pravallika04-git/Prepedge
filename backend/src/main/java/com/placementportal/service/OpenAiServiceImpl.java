@@ -20,13 +20,16 @@ public class OpenAiServiceImpl implements AiService {
 
     private static final Logger logger = LoggerFactory.getLogger(OpenAiServiceImpl.class);
 
-    @Value("${app.ai.api-key}")
+    @Value("${app.ai.provider:gemini}")
+    private String provider;
+
+    @Value("${app.ai.api-key:}")
     private String apiKey;
 
-    @Value("${app.ai.api-url}")
+    @Value("${app.ai.api-url:}")
     private String apiUrl;
 
-    @Value("${app.ai.model}")
+    @Value("${app.ai.model:gemini-3.8-flash}")
     private String model;
 
     private final RestTemplate restTemplate = new RestTemplate();
@@ -48,15 +51,45 @@ public class OpenAiServiceImpl implements AiService {
 
     @Override
     public String analyzeResume(String resumeText) {
+        if (resumeText == null || resumeText.trim().length() < 100 || !isLikelyResume(resumeText)) {
+            return "{\"isResume\": false, \"error\": \"The uploaded text does not meet resume criteria. A valid resume must contain standard sections such as Education, Technical Skills, Projects, or Experience.\"}";
+        }
+
         List<Map<String, String>> messages = List.of(
                 Map.of("role", "system", "content",
-                        "You are an expert resume reviewer for campus placement preparation. " +
-                        "Analyze the resume and provide: 1) Overall score (0-100), 2) Strengths, " +
-                        "3) Weaknesses, 4) Specific suggestions for improvement, " +
-                        "5) ATS compatibility score. Format your response as structured JSON."),
-                Map.of("role", "user", "content", "Please analyze this resume:\n\n" + resumeText)
+                        "You are an expert resume reviewer for campus placement preparation.\n" +
+                        "STEP 1: Verify whether the user's text is actually a candidate resume or CV for jobs/internships.\n" +
+                        "If the text is NOT a resume (e.g. random dialogue, lyrics, food recipe, essay, problem statement, or non-resume content), you MUST output ONLY this JSON format:\n" +
+                        "{\n" +
+                        "  \"isResume\": false,\n" +
+                        "  \"error\": \"The uploaded text is not recognized as a resume. Please provide a document with sections like Education, Technical Skills, Projects, and Experience.\"\n" +
+                        "}\n\n" +
+                        "STEP 2: If it IS a valid resume, analyze it thoroughly and output ONLY valid JSON in this exact structure:\n" +
+                        "{\n" +
+                        "  \"isResume\": true,\n" +
+                        "  \"score\": 75,\n" +
+                        "  \"atsScore\": 70,\n" +
+                        "  \"strengths\": [\"...\"],\n" +
+                        "  \"weaknesses\": [\"...\"],\n" +
+                        "  \"suggestions\": [\"...\"]\n" +
+                        "}\n" +
+                        "Return ONLY valid JSON without markdown fences."),
+                Map.of("role", "user", "content", "Document to review:\n\n" + resumeText)
         );
         return callApi(messages);
+    }
+
+    private boolean isLikelyResume(String text) {
+        if (text == null || text.trim().length() < 100) return false;
+        String lower = text.toLowerCase();
+
+        boolean hasEducation = lower.matches("(?s).*\\b(education|degree|b\\.?tech|b\\.?e|m\\.?tech|m\\.?e|bca|mca|bachelor|master|university|college|school|cgpa|gpa|percentage|academics|diploma)\\b.*");
+        boolean hasSkills = lower.matches("(?s).*\\b(skills|technical skills|technologies|programming|languages|frameworks|tools|competencies|proficiencies|database|tech stack|libraries|developer)\\b.*");
+        boolean hasProjects = lower.matches("(?s).*\\b(experience|work experience|employment|internship|intern|projects|project|responsibilities|contributions|developed|implemented|designed|built)\\b.*");
+        boolean hasContact = lower.matches("(?s).*\\b(email|phone|mobile|contact|linkedin|github|portfolio|summary|objective|profile)\\b.*") || lower.contains("@");
+
+        int matches = (hasEducation ? 1 : 0) + (hasSkills ? 1 : 0) + (hasProjects ? 1 : 0) + (hasContact ? 1 : 0);
+        return matches >= 2;
     }
 
     @Override
@@ -96,39 +129,179 @@ public class OpenAiServiceImpl implements AiService {
     }
 
     private String callApi(List<Map<String, String>> messages) {
-        try {
-            if (apiKey == null || apiKey.isBlank() || apiKey.equals("sk-placeholder")) {
-                logger.info("No valid AI API key configured — using mock fallback.");
-                return generateMockResponse(messages);
-            }
-
-            HttpHeaders headers = new HttpHeaders();
-            headers.setContentType(MediaType.APPLICATION_JSON);
-            headers.setBearerAuth(apiKey);
-
-            Map<String, Object> body = new HashMap<>();
-            body.put("model", model);
-            body.put("messages", messages);
-            body.put("max_tokens", 2000);
-            body.put("temperature", 0.7);
-
-            HttpEntity<Map<String, Object>> request = new HttpEntity<>(body, headers);
-            ResponseEntity<Map> response = restTemplate.postForEntity(
-                    apiUrl + "/chat/completions", request, Map.class);
-
-            if (response.getBody() != null) {
-                List<Map<String, Object>> choices = (List<Map<String, Object>>) response.getBody().get("choices");
-                if (choices != null && !choices.isEmpty()) {
-                    Map<String, Object> message = (Map<String, Object>) choices.get(0).get("message");
-                    return (String) message.get("content");
-                }
-            }
-            logger.warn("AI API returned empty response body — falling back to mock.");
-            return generateMockResponse(messages);
-        } catch (Exception e) {
-            logger.error("AI API call failed: {} — falling back to mock questions.", e.getMessage());
+        if (apiKey == null || apiKey.isBlank() || apiKey.equals("sk-placeholder") || apiKey.equals("placeholder")) {
+            logger.info("No valid AI API key configured — using mock fallback.");
             return generateMockResponse(messages);
         }
+
+        try {
+            if (isGeminiProvider()) {
+                return callGeminiApi(messages);
+            } else {
+                return callOpenAiApi(messages);
+            }
+        } catch (Exception e) {
+            logger.error("AI API call failed: {} — falling back to mock response.", e.getMessage());
+            return generateMockResponse(messages);
+        }
+    }
+
+    private boolean isGeminiProvider() {
+        if (provider != null && provider.equalsIgnoreCase("gemini")) {
+            return true;
+        }
+        if (apiKey != null) {
+            String key = apiKey.trim();
+            if (key.startsWith("AIza") || key.startsWith("AQ.")) {
+                return true;
+            }
+            if (!key.startsWith("sk-")) {
+                return true;
+            }
+        }
+        if (apiUrl != null && apiUrl.contains("googleapis.com")) {
+            return true;
+        }
+        return false;
+    }
+
+    private String resolveGeminiModel() {
+        if (model != null && !model.isBlank() && !model.startsWith("gpt") && !model.contains("1.5") && !model.equals("gemini-2.5-flash")) {
+            return model;
+        }
+        return "gemini-3.5-flash";
+    }
+
+    private String callGeminiApi(List<Map<String, String>> messages) {
+        String configuredModel = resolveGeminiModel();
+        List<String> modelsToTry = new ArrayList<>();
+        modelsToTry.add(configuredModel);
+        if (!configuredModel.equals("gemini-3.5-flash")) modelsToTry.add("gemini-3.5-flash");
+        if (!configuredModel.equals("gemini-3.8-flash")) modelsToTry.add("gemini-3.8-flash");
+        if (!configuredModel.equals("gemini-flash-latest")) modelsToTry.add("gemini-flash-latest");
+        if (!configuredModel.equals("gemini-3.1-flash-lite")) modelsToTry.add("gemini-3.1-flash-lite");
+
+        for (String candidateModel : modelsToTry) {
+            try {
+                return executeGeminiRequest(messages, candidateModel);
+            } catch (Exception e) {
+                logger.warn("Gemini candidate {} returned error: {} — trying next available model.", candidateModel, e.getMessage());
+            }
+        }
+        logger.error("All Gemini model candidates failed — falling back to educational response.");
+        return generateMockResponse(messages);
+    }
+
+    private String executeGeminiRequest(List<Map<String, String>> messages, String targetModel) {
+        String targetUrl;
+        if (apiUrl != null && !apiUrl.isBlank()) {
+            targetUrl = apiUrl.endsWith("/") ? apiUrl.substring(0, apiUrl.length() - 1) : apiUrl;
+            if (!targetUrl.contains("/models/")) {
+                targetUrl = targetUrl + "/models/" + targetModel + ":generateContent?key=" + apiKey.trim();
+            } else if (!targetUrl.contains("key=")) {
+                targetUrl = targetUrl + "?key=" + apiKey.trim();
+            }
+        } else {
+            targetUrl = "https://generativelanguage.googleapis.com/v1beta/models/" + targetModel + ":generateContent?key=" + apiKey.trim();
+        }
+
+        HttpHeaders headers = new HttpHeaders();
+        headers.setContentType(MediaType.APPLICATION_JSON);
+
+        String systemPrompt = null;
+        List<Map<String, Object>> contents = new ArrayList<>();
+
+        for (Map<String, String> msg : messages) {
+            String role = msg.get("role");
+            String content = msg.get("content");
+            if (content == null || content.isBlank()) continue;
+
+            if ("system".equalsIgnoreCase(role)) {
+                systemPrompt = (systemPrompt == null) ? content : systemPrompt + "\n" + content;
+            } else {
+                String geminiRole = "user".equalsIgnoreCase(role) ? "user" : "model";
+                contents.add(Map.of(
+                    "role", geminiRole,
+                    "parts", List.of(Map.of("text", content))
+                ));
+            }
+        }
+
+        if (contents.isEmpty()) {
+            contents.add(Map.of(
+                "role", "user",
+                "parts", List.of(Map.of("text", "Hello"))
+            ));
+        }
+
+        Map<String, Object> body = new HashMap<>();
+        if (systemPrompt != null && !systemPrompt.isBlank()) {
+            body.put("systemInstruction", Map.of(
+                "parts", List.of(Map.of("text", systemPrompt))
+            ));
+        }
+        body.put("contents", contents);
+
+        Map<String, Object> genConfig = new HashMap<>();
+        genConfig.put("temperature", 0.7);
+        genConfig.put("maxOutputTokens", 2048);
+        body.put("generationConfig", genConfig);
+
+        HttpEntity<Map<String, Object>> request = new HttpEntity<>(body, headers);
+        ResponseEntity<Map> response = restTemplate.postForEntity(targetUrl, request, Map.class);
+
+        if (response.getBody() != null) {
+            Map respMap = response.getBody();
+            List<Map<String, Object>> candidates = (List<Map<String, Object>>) respMap.get("candidates");
+            if (candidates != null && !candidates.isEmpty()) {
+                Map<String, Object> firstCandidate = candidates.get(0);
+                Map<String, Object> contentMap = (Map<String, Object>) firstCandidate.get("content");
+                if (contentMap != null) {
+                    List<Map<String, Object>> parts = (List<Map<String, Object>>) contentMap.get("parts");
+                    if (parts != null && !parts.isEmpty()) {
+                        String text = (String) parts.get(0).get("text");
+                        if (text != null && !text.isBlank()) {
+                            return text;
+                        }
+                    }
+                }
+            }
+        }
+
+        throw new RuntimeException("Gemini returned empty response body");
+    }
+
+    private String callOpenAiApi(List<Map<String, String>> messages) {
+        String effectiveUrl = (apiUrl != null && !apiUrl.isBlank()) ? apiUrl : "https://api.openai.com/v1";
+        if (effectiveUrl.endsWith("/")) {
+            effectiveUrl = effectiveUrl.substring(0, effectiveUrl.length() - 1);
+        }
+        if (!effectiveUrl.endsWith("/chat/completions")) {
+            effectiveUrl = effectiveUrl + "/chat/completions";
+        }
+
+        HttpHeaders headers = new HttpHeaders();
+        headers.setContentType(MediaType.APPLICATION_JSON);
+        headers.setBearerAuth(apiKey.trim());
+
+        Map<String, Object> body = new HashMap<>();
+        body.put("model", (model != null && !model.isBlank()) ? model : "gpt-3.5-turbo");
+        body.put("messages", messages);
+        body.put("max_tokens", 2000);
+        body.put("temperature", 0.7);
+
+        HttpEntity<Map<String, Object>> request = new HttpEntity<>(body, headers);
+        ResponseEntity<Map> response = restTemplate.postForEntity(effectiveUrl, request, Map.class);
+
+        if (response.getBody() != null) {
+            List<Map<String, Object>> choices = (List<Map<String, Object>>) response.getBody().get("choices");
+            if (choices != null && !choices.isEmpty()) {
+                Map<String, Object> message = (Map<String, Object>) choices.get(0).get("message");
+                return (String) message.get("content");
+            }
+        }
+        logger.warn("OpenAI API returned empty response body — falling back to mock.");
+        return generateMockResponse(messages);
     }
 
     // ─── Educational mock fallback ────────────────────────────────────────────
@@ -136,8 +309,15 @@ public class OpenAiServiceImpl implements AiService {
         String lastMessage = messages.get(messages.size() - 1).get("content").toLowerCase();
 
         // ── Structured-data responses (used by resume/interview controllers) ──
-        if ((lastMessage.contains("resume") || lastMessage.contains("cv")) && lastMessage.contains("analyz")) {
-            return "{\"score\": 72, \"strengths\": [\"Good technical skills section\", \"Clear project descriptions\"], " +
+        if ((lastMessage.contains("resume") || lastMessage.contains("cv") || lastMessage.contains("document to review")) && (lastMessage.contains("analyz") || lastMessage.contains("review"))) {
+            String userDoc = messages.get(messages.size() - 1).get("content");
+            if (userDoc.contains("Document to review:\n\n")) {
+                userDoc = userDoc.substring(userDoc.indexOf("Document to review:\n\n") + "Document to review:\n\n".length());
+            }
+            if (!isLikelyResume(userDoc)) {
+                return "{\"isResume\": false, \"error\": \"The uploaded text does not appear to be a resume. A valid resume must contain standard sections such as Education, Technical Skills, Projects, or Experience.\"}";
+            }
+            return "{\"isResume\": true, \"score\": 72, \"strengths\": [\"Good technical skills section\", \"Clear project descriptions\"], " +
                    "\"weaknesses\": [\"Missing quantified achievements\", \"No summary statement\"], " +
                    "\"suggestions\": [\"Add metrics to project descriptions\", \"Include a professional summary\", " +
                    "\"Add relevant certifications\", \"Use action verbs\"], \"atsScore\": 68}";
